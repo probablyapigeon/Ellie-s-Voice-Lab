@@ -36,7 +36,7 @@ def main():
                 page.locator('#observation-form [name=notes]').fill('<script>alert(1)</script> observed behavior')
                 page.locator('#observation-form button[type=submit]').click()
                 page.locator('.analysis-controls').wait_for()
-                assert page.locator('.analysis-controls tbody tr').count() == 6
+                assert page.locator('.analysis-controls tbody tr').count() == 10
                 with page.expect_download() as download:
                     page.get_by_role('link', name='Export JSON', exact=True).click()
                 download.value.save_as(str(artifacts / 'browser-evidence.json'))
@@ -44,6 +44,8 @@ def main():
                 page.locator('.nav[data-view=sandbox]').click()
                 page.locator('#simulation-form button[type=submit]').click()
                 page.locator('#trace-step').wait_for()
+                assert page.locator('.agent-grid article').count() == 5
+                assert page.get_by_role('heading', name='Deterministic learner', exact=True).count() == 1
                 page.locator('#trace-step').fill('40'); page.locator('#trace-step').dispatch_event('input')
                 page.screenshot(path=str(artifacts / 'sandbox.png'), full_page=True)
                 page.set_viewport_size({'width':390,'height':844})

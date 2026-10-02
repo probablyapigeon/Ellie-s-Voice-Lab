@@ -13,13 +13,20 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 SCHEMA = 'bird-voice-lab/1'
 CONTROLS = {
     'chance': 'Uniform chance', 'position': 'First-position bias',
     'brightness': 'Brightness bias', 'habit': 'Past-choice frequency',
     'echo': 'Prompt echo', 'context': 'Recorded context',
 }
+LEGACY_CONTROLS = tuple(CONTROLS)
+CONTROLS.update({
+    'det_position': 'Deterministic first position',
+    'det_brightness': 'Deterministic brightest symbol',
+    'det_habit': 'Deterministic most frequent choice',
+    'det_learner': 'Deterministic context learner',
+})
 
 
 class LabError(ValueError):
@@ -67,7 +74,7 @@ def normalize(weights):
     return {k: v / total for k, v in weights.items()} if total > 0 else {k: 1 / len(weights) for k in weights}
 
 
-def predictions(choices, features, prompt, previous):
+def predictions(choices, features, prompt, previous, context='', history=()):
     """The signature excludes objective answers and current/future observations."""
     n = len(choices)
     counts = {c: 1.0 for c in choices}  # Laplace prior, only completed earlier responses.
@@ -100,10 +107,44 @@ def predictions(choices, features, prompt, previous):
         'echo': 'The last label occurring in the prompt has weight 8; others have weight 1. Substring matching is a simple authored heuristic.',
         'context': 'Uses researcher-supplied context weights plus 0.05. These ratings are not an independent measurement of meaning.',
     }
-    return [{'id': k, 'name': CONTROLS[k], 'probabilities': normalize(v),
+    result = [{'id': k, 'name': CONTROLS[k], 'probabilities': normalize(v),
              'visible_inputs': visible[k], 'rationale': notes[k], 'weights': v,
              'prior_response_count': sum(o['outcome'] == 'response' for o in previous) if k == 'habit' else 0}
             for k, v in weights.items()]
+    context_key = ' '.join(context.casefold().split())
+    values = {c: 0.0 for c in choices}
+    updates = []
+    for index, prior in enumerate(history, 1):
+        observation = prior['observation']
+        if (' '.join(prior['context'].casefold().split()) != context_key
+                or observation['outcome'] != 'response'
+                or observation['corroboration'] not in ('yes', 'no')):
+            continue
+        choice = observation['choice']
+        reward = int(observation['corroboration'] == 'yes')
+        before = values[choice]
+        values[choice] += 0.25 * (reward - before)
+        updates.append({'prior_trial': index, 'choice': choice, 'recorded_corroboration':
+                        observation['corroboration'], 'value_before': before, 'value_after': values[choice]})
+    fixed = {
+        'det_position': (choices[0], 'Always selects the first recorded display position.', ['recorded_display_order']),
+        'det_brightness': (max(choices, key=lambda c: next(f['brightness'] for f in features if f['choice'] == c)),
+                           'Selects the highest recorded brightness.', ['brightness', 'recorded_display_order']),
+        'det_habit': (max(choices, key=lambda c: counts[c]), 'Selects the most frequent earlier response.',
+                      ['previous_completed_choices', 'recorded_display_order']),
+        'det_learner': (max(choices, key=lambda c: values[c]),
+            'For an exactly matching normalized context, learns only from earlier selections with assessed corroboration. '
+            'Initial values 0; value += 0.25 * (reward - value); yes = 1, no = 0. No random draws. '
+            'This is an observational associative control, not a semantic model.',
+            ['context', 'earlier_assessed_choices_and_corroboration', 'recorded_display_order']),
+    }
+    for key, (chosen, rationale, visible_inputs) in fixed.items():
+        result.append({'id': key, 'name': CONTROLS[key], 'deterministic': True, 'selected_choice': chosen,
+            'probabilities': {c: float(c == chosen) for c in choices}, 'visible_inputs': visible_inputs,
+            'rationale': rationale + ' Ties select the first recorded display position.',
+            'state': {'values': values, 'context_key': context_key, 'updates': updates} if key == 'det_learner'
+                     else {'earlier_choice_counts': counts} if key == 'det_habit' else {}})
+    return result
 
 
 def verify_export(bundle):
@@ -128,21 +169,31 @@ def verify_export(bundle):
     return {'valid': not errors, 'errors': errors, 'count': len(events), 'head': previous}
 
 
-def score(trials):
+def score(trials, control_ids=None):
     completed = [t for t in trials if 'observation' in t]
     responses = [t for t in completed if t['observation']['outcome'] == 'response']
     assessed = [t for t in responses if t['observation']['corroboration'] in ('yes', 'no')]
     corroborated = sum(t['observation']['corroboration'] == 'yes' for t in assessed)
     objective = [t for t in responses if t['target'] is not None]
     controls = []
-    for key, label in CONTROLS.items():
-        brier, losses = [], []
+    if control_ids is None:
+        control_ids = list(dict.fromkeys(p['id'] for t in trials for p in t['predictions'])) or list(CONTROLS)
+    for key in control_ids:
+        label = CONTROLS[key]
+        brier, losses, matches, impossible = [], [], [], 0
         for t in responses:
-            p = next(p['probabilities'] for p in t['predictions'] if p['id'] == key)
+            prediction = next((p for p in t['predictions'] if p['id'] == key), None)
+            if prediction is None: continue
+            p = prediction['probabilities']
             choice = t['observation']['choice']
             brier.append(sum((v - int(c == choice)) ** 2 for c, v in p.items()))
             losses.append(-math.log(max(p[choice], 1e-15)))
-        controls.append({'id': key, 'name': label, 'n': len(responses),
+            impossible += int(p[choice] == 0)
+            if prediction.get('deterministic'): matches.append(prediction['selected_choice'] == choice)
+        controls.append({'id': key, 'name': label, 'n': len(brier),
+            'deterministic': key.startswith('det_'), 'exact_matches': sum(matches) if matches else None,
+            'exact_match_rate': sum(matches) / len(matches) if matches else None,
+            'zero_probability_responses': impossible, 'log_loss_probability_floor': 1e-15,
             'brier': sum(brier) / len(brier) if brier else None,
             'log_loss': sum(losses) / len(losses) if losses else None})
     return {'completed': len(completed), 'responses': len(responses),
@@ -195,7 +246,7 @@ class Lab:
                 trial['observation'] = copy.deepcopy(event['payload']); trial['status'] = 'recorded'
             elif event['type'] == 'closed':
                 state['status'] = 'closed'; state['closed_reason'] = event['payload']['reason']
-        state['summary'] = score(state['trials'])
+        state['summary'] = score(state['trials'], state.get('control_ids', LEGACY_CONTROLS))
         return state
 
     def _append(self, db, study, kind, payload):
@@ -240,8 +291,8 @@ class Lab:
             'criterion': text(data.get('criterion', ''), 'Corroboration criterion', 2000, True),
             'seed': integer(data.get('seed', 42), 'Seed', 0, 2**31 - 1),
             'max_trials': integer(data.get('max_trials', 40), 'Maximum trials', 1, 200),
-            'choices': choices, 'synthetic': synthetic, 'created_at': now(), 'software_version': VERSION,
-            'control_labels_hash': digest(CONTROLS), 'design': 'Prospective observation; manual scoring; six authored comparison models.'}
+            'choices': choices, 'control_ids': list(CONTROLS), 'synthetic': synthetic, 'created_at': now(), 'software_version': VERSION,
+            'control_labels_hash': digest(CONTROLS), 'design': 'Prospective observation; manual scoring; six probabilistic and four deterministic comparison models.'}
         with self.lock, self.connect() as db:
             db.execute('BEGIN IMMEDIATE'); self._append(db, config['id'], 'study', config)
         return self.get_study(config['id'])
@@ -268,10 +319,14 @@ class Lab:
             target = data.get('target') or None
             if target is not None and target not in choices: raise LabError('Objective target must be an available symbol.')
             prompt = text(data.get('prompt', ''), 'Prompt')
+            context = text(data.get('context', ''), 'Context')
+            history = [{'context': t['context'], 'observation': t['observation']}
+                       for t in s['trials'] if 'observation' in t]
             trial = {'id': uuid.uuid4().hex, 'number': len(s['trials']) + 1, 'prompt': prompt,
-                'context': text(data.get('context', ''), 'Context'), 'target': target,
+                'context': context, 'target': target,
                 'features': clean, 'display_order': choices, 'committed_at': now(),
-                'predictions': predictions(choices, clean, prompt, [t['observation'] for t in s['trials'] if 'observation' in t])}
+                'predictions': [p for p in predictions(choices, clean, prompt, [t['observation'] for t in s['trials']
+                    if 'observation' in t], context, history) if p['id'] in s.get('control_ids', LEGACY_CONTROLS)]}
             self._append(db, study, 'trial', trial)
         return {'id': trial['id'], 'number': trial['number'], 'committed_at': trial['committed_at']}
 
@@ -343,35 +398,37 @@ def simulate(data):
     reverse = integer(data.get('reverse_at', steps // 2), 'Reversal step', 1, steps - 1)
     choices = ['apple', 'music', 'rest']
     agents = {}
-    for kind in ('adaptive', 'frozen', 'chance'):
-        rng = random.Random(seed)
+    for kind in ('adaptive', 'frozen', 'chance', 'deterministic', 'det_frozen'):
+        deterministic = kind in ('deterministic', 'det_frozen')
+        rng = None if deterministic else random.Random(seed)
         values = {c: 0.0 for c in choices}; counts = {c: 0 for c in choices}; fatigue = 0.0
         trace = []
         for i in range(steps):
             before = {'values': dict(values), 'fatigue': fatigue, 'visits': dict(counts)}
             scores = {c: values[c] + 0.16 / (1 + counts[c]) - 0.20 * fatigue for c in choices}
             scores['rest'] = values['rest'] + 0.16 / (1 + counts['rest']) + 0.60 * fatigue
-            draw = rng.random()
-            explore_draw = rng.randrange(len(choices))
-            if kind == 'chance' or draw < 0.12:
+            draw = rng.random() if rng else None
+            explore_draw = rng.randrange(len(choices)) if rng else None
+            if kind == 'chance' or (not deterministic and draw < 0.12):
                 chosen = choices[explore_draw]; reason = 'Seeded exploration' if kind != 'chance' else 'Uniform random choice'
             else:
-                chosen = max(choices, key=lambda c: scores[c]); reason = 'Highest state-dependent score'
+                chosen = max(choices, key=lambda c: scores[c]); reason = 'Deterministic maximum score; ties use apple, music, rest order' if deterministic else 'Highest state-dependent score'
             rewards = {'apple': 0.9 if i < reverse else 0.1, 'music': 0.1 if i < reverse else 0.9, 'rest': 0.25}
             reward = rewards[chosen]
-            if kind == 'adaptive': values[chosen] += 0.25 * (reward - values[chosen])
+            if kind in ('adaptive', 'deterministic'): values[chosen] += 0.25 * (reward - values[chosen])
             counts[chosen] += 1
             fatigue = max(0.0, fatigue - 0.40) if chosen == 'rest' else min(1.0, fatigue + 0.10)
             trace.append({'step': i + 1, 'phase': 'before reversal' if i < reverse else 'after reversal',
                 'choice': chosen, 'reward': reward, 'scores': scores, 'reason': reason, 'random_draw': draw,
                 'exploration_index': explore_draw, 'state_before': before,
                 'state_after': {'values': dict(values), 'fatigue': fatigue, 'visits': dict(counts)}})
-        agents[kind] = {'trace': trace, 'final_values': values,
+        agents[kind] = {'trace': trace, 'final_values': values, 'deterministic': deterministic,
+            'learning_enabled': kind in ('adaptive', 'deterministic'),
             'total_reward': sum(t['reward'] for t in trace), 'counts': counts}
     return {'synthetic': True, 'seed': seed, 'steps': steps, 'reverse_at': reverse, 'agents': agents,
         'rules': {'learning_rate': 0.25, 'exploration_probability': 0.12, 'choice_order_for_ties': choices,
             'exploration_bonus': '0.16/(1+visits)', 'activity_fatigue_cost': 0.20, 'rest_fatigue_bonus': 0.60,
-            'fatigue_increase': 0.10, 'fatigue_recovery': 0.40,
+            'fatigue_increase': 0.10, 'fatigue_recovery': 0.40, 'deterministic_exploration_probability': 0.0,
             'rewards_before': {'apple': 0.9, 'music': 0.1, 'rest': 0.25},
             'rewards_after': {'apple': 0.1, 'music': 0.9, 'rest': 0.25}},
-        'interpretation': 'Authored learning mechanisms in a constructed environment. Learning-disabled shares the adaptive action rule and random tape; chance is a separate policy. A successful reversal demonstrates this implementation, not subjective experience or a validated model of a bird.'}
+        'interpretation': 'Authored mechanisms in a constructed environment. Stochastic learner and its learning-disabled control share the random tape. Deterministic learner and its learning-disabled control use no random generator; they share score rules and fixed tie order. The visit bonus encourages trying less visited choices deterministically. Seed changes affect only stochastic agents. No policy receives the reversal schedule before choosing. Comparison concerns these specified mechanisms, not proof of intention or a validated biological model.'}

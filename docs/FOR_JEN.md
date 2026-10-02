@@ -4,7 +4,7 @@ Bird Voice Lab is a small, independent research notebook made to support continu
 
 Extract the complete Windows ZIP and open `BirdVoiceLab.exe`. Click **Explore a synthetic example** first: it shows the notebook without making up any real bird observations. The **Field guide** explains the workflow. Use **Quit application** when finished.
 
-For a real study, define your question and corroborating behavior, then record the layout and context before each trial. Predictions are saved before the response. A selection, nonresponse, withdrawal, or distress each has its own record. The six comparison controls have deliberately simple, inspectable rules.
+For a real study, define your question and corroborating behavior, then record the layout and context before each trial. Predictions are saved before the response. A selection, nonresponse, withdrawal, or distress each has its own record. The ten comparison controls include four deterministic rules with explicit predictions. The context learner updates only from earlier assessed observations in a matching context; it uses no random draws. These comparisons test particular explanations and do not determine whether a bird itself is deterministic.
 
 The agent sandbox is a separate place to examine how a simulated policy changes through learning, fatigue, rest, and a changing reward environment. Every decision has a trace, and the same seed replays the same run.
 

@@ -25,12 +25,16 @@ with tempfile.TemporaryDirectory() as folder:
             page.goto(url)
             page.locator('#demo').click()
             page.locator('.analysis-controls').wait_for()
+            assert page.locator('.analysis-controls tbody tr').count() == 10
             with page.expect_download() as download:
                 page.get_by_role('link', name='Export JSON', exact=True).click()
             evidence = Path(folder) / 'evidence.json'; download.value.save_as(str(evidence))
+            assert json.loads(evidence.read_text(encoding='utf-8'))['software_version'] == '0.2.0'
             page.locator('.nav[data-view=sandbox]').click()
             page.locator('#simulation-form button[type=submit]').click()
             page.locator('#trace-step').wait_for()
+            assert page.locator('.agent-grid article').count() == 5
+            assert page.get_by_role('heading', name='Deterministic learner', exact=True).count() == 1
             page.locator('#quit').click()
             process.wait(timeout=10)
             assert process.returncode == 0 and not errors, (process.returncode, errors)

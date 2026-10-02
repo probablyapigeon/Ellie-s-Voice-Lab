@@ -2,7 +2,7 @@
 
 Published as **Ellie's Voice Lab** on GitHub.
 
-[Download the runnable Windows package](https://github.com/probablyapigeon/Ellie-s-Voice-Lab/releases/download/v0.1.0/BirdVoiceLab-0.1.0-Windows.zip) · [Release and source download](https://github.com/probablyapigeon/Ellie-s-Voice-Lab/releases/tag/v0.1.0) · [Welcome guide for Jen](docs/FOR_JEN.md)
+[Download the runnable Windows package](https://github.com/probablyapigeon/Ellie-s-Voice-Lab/releases/download/v0.2.0/BirdVoiceLab-0.2.0-Windows.zip) · [Release and source download](https://github.com/probablyapigeon/Ellie-s-Voice-Lab/releases/tag/v0.2.0) · [Welcome guide for Jen](docs/FOR_JEN.md)
 
 A local research notebook for bird communication studies, with transparent comparison controls and a separate learning-agent sandbox. Built to share with Jen, inspired by the computational controls described in the Parrot Kindergarten documentary. This is an independent tool, not a reconstruction of Pigeon42.
 
@@ -15,17 +15,19 @@ Source (Python 3.11 or later): run `python app.py`. The application uses only th
 ## Research workflow
 
 1. Write the question, available choices, corroboration criterion and trial limit. The saved protocol is immutable.
-2. Before presenting a trial, record the actual display order, brightness estimates, prompt and context weights. Commit the trial to store all six predictions before observing a response.
+2. Before presenting a trial, record the actual display order, brightness estimates, prompt and context weights. Commit the trial to store all ten predictions before observing a response.
 3. Record selection, latency, initiative, corroboration and notes. Record withdrawal, distress and no response explicitly. Withdrawal/distress ends a study; two consecutive no-response trials also end it.
 4. Export JSON for full records, CSV for a spreadsheet, and a separate integrity receipt. Keep the receipt independently of the JSON.
 
-Controls compare uniform chance, first-position bias, brightness, prior choice frequency, literal prompt echo and researcher-rated context. Scores are descriptive Brier scores and log loss, not significance tests or certificates of intention. Pending predictions are hidden in the observation screen; completed trials and exports reveal them. This is not a double-blind study system. Context ratings and corroboration are supplied by people and can carry observer bias.
+Controls compare uniform chance, first-position bias, brightness, prior choice frequency, literal prompt echo and researcher-rated context, plus deterministic first-position, brightest-symbol, most-frequent-choice and context-learning controls. New studies lock all ten controls; existing 0.1 studies retain their six original controls. Scores are descriptive Brier scores and log loss, not significance tests or certificates of intention. Pending predictions are hidden in the observation screen; completed trials and exports reveal them. This is not a double-blind study system. Context ratings and corroboration are supplied by people and can carry observer bias.
+
+Deterministic observation controls assign probability 1 to their chosen symbol and 0 to all others; ties use the first recorded position. The context learner uses exactly matching context text after normalizing case/whitespace, starts values at zero, and learns from earlier assessed selections: `value += 0.25 * (reward - value)`, with corroboration yes = 1 and no = 0. Unknown/nonresponse outcomes do not update it. It cannot read the objective target or current response. This is an observational associative learner, not a semantic model. A wrong deterministic prediction has Brier score 2 and infinite mathematical log loss; the displayed log loss uses a probability floor of 10^-15, with zero-probability responses counted separately.
 
 Records cannot be edited in this version. Check entries before saving; explain errors in an external annotation alongside the exported evidence. An unanswered or uncertain corroboration judgment stays unknown rather than being counted as failure.
 
 ## Agent sandbox
 
-Compare a learning policy, the same policy with learning disabled, and uniform chance under a seeded reward reversal and fatigue/rest rule. Inspect every state transition and export the simulation. Synthetic results remain separate from bird observations. These simple policies explore mechanisms; they do not establish animal cognition.
+Compare stochastic and deterministic learners, their corresponding policies with learning disabled, and uniform chance under a seeded reward reversal and fatigue/rest rule. Inspect every state transition and export the simulation. Deterministic agents make no random draws and are independent of the seed; their declared visit bonus and tie order determine exploration. Synthetic results remain separate from bird observations. These simple policies explore mechanisms; they do not establish animal cognition.
 
 ## Data and privacy
 
@@ -37,7 +39,7 @@ Use `python app.py --data-dir YOUR_FOLDER` to keep a separate notebook. Verify a
 
 Run `python -m unittest discover -s tests -v`. Browser checks additionally require Playwright and Chromium: `python tests/browser_check.py`. Build Windows on Windows with `python -m pip install pyinstaller`, then `python -m PyInstaller --noconfirm --onedir --name BirdVoiceLab --add-data "web;web" app.py`. Preserve the complete output folder when distributing it.
 
-Version 0.1.0. MIT license. No original bird observations or documentary media are distributed.
+Version 0.2.0. MIT license. No original bird observations or documentary media are distributed.
 
 ## Research context
 
