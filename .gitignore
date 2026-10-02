@@ -1,0 +1,9 @@
+.build-env/
+build/
+dist/
+releases/
+test-artifacts/
+__pycache__/
+*.pyc
+*.sqlite*
+*.spec
